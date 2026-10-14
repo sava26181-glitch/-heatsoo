@@ -1,367 +1,109 @@
-name: Build AXMenu Rootless
+name: Build AXMenu (rootless)
 
 on:
   push:
-    branches:
-      - main
-      - master
   pull_request:
-    branches:
-      - main
-      - master
   workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: axmenu-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build iOS Rootless Debian Package
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
-
     env:
       THEOS: ${{ github.workspace }}/theos
-      DEBIAN_FRONTEND: noninteractive
-
+      CI: "true"
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install Theos (official installer)
         shell: bash
         run: |
           set -Eeuo pipefail
-
           sudo apt-get update
+          sudo apt-get install -y curl sudo
+          export THEOS
+          curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos -o install-theos
+          bash install-theos 2>&1 | tee "$RUNNER_TEMP/install-theos.log"
 
-          sudo apt-get install -y \
-            bash \
-            build-essential \
-            ca-certificates \
-            curl \
-            file \
-            fakeroot \
-            git \
-            lzma \
-            make \
-            perl \
-            pkg-config \
-            python3 \
-            rsync \
-            unzip \
-            xz-utils \
-            zlib1g-dev \
-            libtinfo6 \
-            libncurses6 \
-            libxml2 \
-            libz3-4 \
-            dpkg-dev
-
-          echo "========== SYSTEM =========="
-          uname -a
-          cat /etc/os-release
-
-      - name: Install libtinfo5 compatibility library
+      - name: Install ldid (ProcursusTeam)
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-
-          if ldconfig -p | grep -q 'libtinfo\.so\.5'; then
-            echo "libtinfo.so.5 is already available."
-            exit 0
-          fi
-
-          PACKAGE_URL="https://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.3_amd64.deb"
-
-          curl \
-            --fail \
-            --show-error \
-            --location \
-            --retry 3 \
-            --retry-all-errors \
-            "$PACKAGE_URL" \
-            --output "$RUNNER_TEMP/libtinfo5.deb"
-
-          test -s "$RUNNER_TEMP/libtinfo5.deb"
-
-          dpkg-deb --info "$RUNNER_TEMP/libtinfo5.deb"
-
-          mkdir -p "$RUNNER_TEMP/libtinfo-extract"
-
-          dpkg-deb -x \
-            "$RUNNER_TEMP/libtinfo5.deb" \
-            "$RUNNER_TEMP/libtinfo-extract"
-
-          TINFO_LIB="$(find "$RUNNER_TEMP/libtinfo-extract" -type f -name 'libtinfo.so.5*' -print -quit)"
-
-          if [[ -z "$TINFO_LIB" ]]; then
-            echo "::error::libtinfo.so.5 was not found in the downloaded package."
-            find "$RUNNER_TEMP/libtinfo-extract" -type f -print
-            exit 1
-          fi
-
-          sudo install -m 0644 "$TINFO_LIB" /usr/local/lib/libtinfo.so.5
-          sudo ldconfig
-
-          ldconfig -p | grep 'libtinfo\.so\.5'
-
-      - name: Install ldid from ProcursusTeam release
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          curl \
-            --fail \
-            --show-error \
-            --location \
-            --retry 3 \
-            --retry-all-errors \
-            "https://api.github.com/repos/ProcursusTeam/ldid/releases/latest" \
-            --output "$RUNNER_TEMP/ldid-release.json"
-
-          python3 - "$RUNNER_TEMP/ldid-release.json" > "$RUNNER_TEMP/ldid-url.txt" <<'PY'
-          import json
-          import sys
-
-          with open(sys.argv[1], encoding="utf-8") as f:
-              release = json.load(f)
-
-          assets = release.get("assets", [])
-
-          candidates = [
-              asset for asset in assets
-              if "linux" in asset["name"].lower()
-              and (
-                  "x86_64" in asset["name"].lower()
-                  or "amd64" in asset["name"].lower()
-              )
-              and not asset["name"].endswith((".sig", ".sha256"))
-          ]
-
-          if not candidates:
-              print("Available release assets:")
-              for asset in assets:
-                  print(asset["name"], asset["browser_download_url"])
-              raise SystemExit("No Linux x86_64 ldid asset found.")
-
-          print(candidates[0]["browser_download_url"])
-          PY
-
-          LDID_URL="$(cat "$RUNNER_TEMP/ldid-url.txt")"
-
-          curl \
-            --fail \
-            --show-error \
-            --location \
-            --retry 3 \
-            --retry-all-errors \
-            "$LDID_URL" \
-            --output "$RUNNER_TEMP/ldid-download"
-
-          test -s "$RUNNER_TEMP/ldid-download"
-
-          mkdir -p "$RUNNER_TEMP/ldid-extract"
-
-          if file "$RUNNER_TEMP/ldid-download" | grep -qi 'gzip compressed'; then
-            gzip -dc "$RUNNER_TEMP/ldid-download" > "$RUNNER_TEMP/ldid"
-          elif file "$RUNNER_TEMP/ldid-download" | grep -qi 'XZ compressed'; then
-            xz -dc "$RUNNER_TEMP/ldid-download" > "$RUNNER_TEMP/ldid"
-          elif file "$RUNNER_TEMP/ldid-download" | grep -qi 'tar archive'; then
-            tar -xf "$RUNNER_TEMP/ldid-download" -C "$RUNNER_TEMP/ldid-extract"
-            LDID_BIN="$(find "$RUNNER_TEMP/ldid-extract" -type f -name ldid -print -quit)"
-            test -n "$LDID_BIN"
-            install -m 0755 "$LDID_BIN" "$RUNNER_TEMP/ldid"
-          else
-            cp "$RUNNER_TEMP/ldid-download" "$RUNNER_TEMP/ldid"
-          fi
-
-          chmod +x "$RUNNER_TEMP/ldid"
-
-          file "$RUNNER_TEMP/ldid"
-
-          if ! file "$RUNNER_TEMP/ldid" | grep -q 'ELF'; then
-            echo "::error::The downloaded ldid file is not an ELF executable."
-            exit 1
-          fi
-
-          sudo install -m 0755 "$RUNNER_TEMP/ldid" /usr/local/bin/ldid
-
+          gh release view --repo ProcursusTeam/ldid --json tagName,assets \
+            --jq '.tagName, (.assets[].name)'
+          asset=$(gh release view --repo ProcursusTeam/ldid --json assets \
+            --jq '.assets[].name | select(test("linux.*(x86_64|amd64)"))' | head -n1)
+          test -n "$asset" || { echo "No linux x86_64 ldid asset"; exit 1; }
+          gh release download --repo ProcursusTeam/ldid --pattern "$asset" --dir "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/$asset" /usr/local/bin/ldid
+          file /usr/local/bin/ldid
+          ldid 2>&1 | head -n3 || true   # ldid без аргументов возвращает ненулевой код
           command -v ldid
-          ldid -h
 
-      - name: Install Theos
+      - name: Verify toolchain
         shell: bash
         run: |
           set -Eeuo pipefail
-
-          git clone \
-            --depth 1 \
-            --recurse-submodules \
-            https://github.com/theos/theos.git \
-            "$THEOS"
-
-          test -f "$THEOS/makefiles/common.mk"
-
-          mkdir -p \
-            "$THEOS/toolchain/linux/iphone" \
-            "$THEOS/sdks"
-
-          echo "========== THEOS REVISION =========="
-          git -C "$THEOS" rev-parse HEAD
-
-      - name: Install Linux iOS toolchain
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          TOOLCHAIN_URL="https://github.com/sbingner/llvm-project/releases/latest/download/linux-ios-arm64e-clang-toolchain.tar.lzma"
-          TOOLCHAIN_ARCHIVE="$RUNNER_TEMP/ios-toolchain.tar.lzma"
-          TOOLCHAIN_EXTRACT="$RUNNER_TEMP/ios-toolchain-extract"
-
-          mkdir -p "$TOOLCHAIN_EXTRACT"
-
-          curl \
-            --fail \
-            --show-error \
-            --location \
-            --retry 3 \
-            --retry-all-errors \
-            "$TOOLCHAIN_URL" \
-            --output "$TOOLCHAIN_ARCHIVE"
-
-          test -s "$TOOLCHAIN_ARCHIVE"
-          xz -t "$TOOLCHAIN_ARCHIVE"
-
-          tar \
-            --lzma \
-            -xf "$TOOLCHAIN_ARCHIVE" \
-            -C "$TOOLCHAIN_EXTRACT"
-
-          CLANG_SOURCE="$(find "$TOOLCHAIN_EXTRACT" -type f -path '*/bin/clang' -print -quit)"
-
-          if [[ -z "$CLANG_SOURCE" ]]; then
-            echo "::error::clang was not found in the extracted toolchain."
-            find "$TOOLCHAIN_EXTRACT" -maxdepth 5 -type f -print
-            exit 1
-          fi
-
-          TOOLCHAIN_ROOT="${CLANG_SOURCE%/bin/clang}"
-
-          cp -a \
-            "$TOOLCHAIN_ROOT/." \
-            "$THEOS/toolchain/linux/iphone/"
-
-          test -x "$THEOS/toolchain/linux/iphone/bin/clang"
-
-          echo "========== TOOLCHAIN BIN =========="
+          echo "========== TOOLCHAIN =========="
           ls -la "$THEOS/toolchain/linux/iphone/bin/"
-
-          echo "========== CLANG VERSION =========="
-          "$THEOS/toolchain/linux/iphone/bin/clang" --version
-
-      - name: Install iOS SDK
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-
-          SDK_REPO="$RUNNER_TEMP/theos-sdks"
-          SDK_NAME="iPhoneOS16.5.sdk"
-          SDK_SOURCE="$SDK_REPO/$SDK_NAME"
-
-          git clone \
-            --depth 1 \
-            https://github.com/theos/sdks.git \
-            "$SDK_REPO"
-
-          if [[ ! -d "$SDK_SOURCE" ]]; then
-            echo "::error::SDK $SDK_NAME is not present in the official Theos SDK repository checkout."
-            echo "Available SDKs:"
-            find "$SDK_REPO" -maxdepth 2 -type d -name '*.sdk' -print
-            exit 1
+          find "$THEOS/toolchain" -name clang -print
+          find "$THEOS/toolchain" -type f -name 'ld64.lld' -print
+          clang="$THEOS/toolchain/linux/iphone/bin/clang"
+          test -x "$clang"
+          file "$clang"
+          ldd "$clang"
+          if ldd "$clang" | grep -q 'not found'; then
+            echo "Missing shared libraries"; exit 1
           fi
+          "$clang" --version
 
-          test -f "$SDK_SOURCE/System/Library/Frameworks/Foundation.framework/Headers/Foundation.h"
-
-          cp -a "$SDK_SOURCE" "$THEOS/sdks/"
-
-          test -f "$THEOS/sdks/$SDK_NAME/System/Library/Frameworks/Foundation.framework/Headers/Foundation.h"
-
-      - name: Verify Theos, toolchain and SDK
+      - name: Verify SDK
         shell: bash
         run: |
           set -Eeuo pipefail
-
-          echo "========== THEOS =========="
-          printf 'THEOS=%s\n' "$THEOS"
-          test -f "$THEOS/makefiles/common.mk"
-
-          echo "========== TOOLCHAIN BIN =========="
-          ls -la "$THEOS/toolchain/linux/iphone/bin/"
-
-          echo "========== CLANG LOCATIONS =========="
-          find "$THEOS/toolchain" -name clang -type f -print
-
-          echo "========== CLANG VERSION =========="
-          test -x "$THEOS/toolchain/linux/iphone/bin/clang"
-          "$THEOS/toolchain/linux/iphone/bin/clang" --version
-
-          echo "========== LINKER BINARIES =========="
-          find "$THEOS/toolchain" -type f \( \
-            -name ld64.lld -o \
-            -name ld.lld -o \
-            -name llvm-ar -o \
-            -name llvm-ranlib \
-          \) -print
-
           echo "========== SDK DIRECTORY =========="
           ls -la "$THEOS/sdks/"
-
           echo "========== SDK SIZES =========="
           du -sh "$THEOS/sdks"/*
+          echo "========== SDK HEADERS =========="
+          find "$THEOS/sdks" -maxdepth 4 -name Foundation.h -print | tee /tmp/fh.txt
+          test -s /tmp/fh.txt
 
-          echo "========== SDK VALIDATION =========="
-          test -f "$THEOS/sdks/iPhoneOS16.5.sdk/System/Library/Frameworks/Foundation.framework/Headers/Foundation.h"
-
-          echo "========== LDID =========="
-          command -v ldid
-          file "$(command -v ldid)"
-
-          echo "========== PROJECT =========="
-          ls -la
-          test -f Makefile
-          test -f control
-
-      - name: Build rootless package
+      - name: Build
         shell: bash
         run: |
           set -Eeuo pipefail
-
-          export THEOS="$GITHUB_WORKSPACE/theos"
           export PATH="$THEOS/toolchain/linux/iphone/bin:$PATH"
-
           make clean
-          make package FINALPACKAGE=1
+          make package FINALPACKAGE=1 2>&1 | tee "$RUNNER_TEMP/build.log"
 
-          echo "========== GENERATED DEB FILES =========="
-
-          find packages -maxdepth 1 -type f -name '*.deb' -print
-
-          if ! compgen -G 'packages/*.deb' > /dev/null; then
-            echo "::error::No .deb package was produced."
-            exit 1
-          fi
-
-          for package in packages/*.deb; do
-            test -s "$package"
-            dpkg-deb --info "$package"
+      - name: Validate .deb
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+          debs=(packages/*.deb)
+          test ${#debs[@]} -ge 1
+          for d in "${debs[@]}"; do
+            test -s "$d"
+            dpkg-deb --info "$d" | tee /tmp/info.txt
+            grep -q 'Package: com.ax.so2menu' /tmp/info.txt
+            grep -q 'Architecture: iphoneos-arm64' /tmp/info.txt
+            dpkg-deb --contents "$d" | tee /tmp/contents.txt
+            grep -q 'var/jb/' /tmp/contents.txt
+            grep -q 'AXMenu.dylib' /tmp/contents.txt
           done
 
-      - name: Upload Debian package artifact
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-build-logs
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: warn
+
+      - name: Upload Debian package
         uses: actions/upload-artifact@v4
         with:
           name: AXMenu-rootless-iphoneos-arm64
