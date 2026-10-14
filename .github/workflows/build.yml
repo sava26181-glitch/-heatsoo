@@ -1,0 +1,58 @@
+name: ax-build
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}-v2
+
+      - name: install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang llvm lld perl libssl-dev libplist-dev \
+            libpng-dev libjpeg-dev fakeroot dpkg file xz-utils unzip wget zstd curl
+          git lfs install || true
+          curl -L -o /usr/local/bin/ldid \
+            https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 || true
+          chmod +x /usr/local/bin/ldid || true
+
+      - name: install theos
+        run: |
+          export THEOS=$GITHUB_WORKSPACE/theos
+          mkdir -p $THEOS
+          if [ ! -d "$THEOS/makefiles" ]; then
+            git clone --recursive --depth 1 https://github.com/theos/theos.git $THEOS || true
+          fi
+          curl -fsSL https://raw.githubusercontent.com/theos/install/master/install.sh -o /tmp/install-theos.sh || true
+          chmod +x /tmp/install-theos.sh || true
+          THEOS=$THEOS bash /tmp/install-theos.sh || true
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
+          echo "=== theos tree ==="
+          ls -la $THEOS/ || true
+          echo "=== toolchain ==="
+          ls -la $THEOS/toolchain/ 2>/dev/null || true
+          find $THEOS/toolchain -name "clang" -type f 2>/dev/null | head -n 5 || true
+          echo "=== sdks ==="
+          ls -la $THEOS/sdks/ 2>/dev/null || true
+
+      - name: build
+        run: |
+          make clean || true
+          make package FINALPACKAGE=1 || true
+          echo "=== packages dir ==="
+          ls -la packages/ || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-deb
+          path: packages/*.deb
+          if-no-files-found: warn
