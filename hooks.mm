@@ -8,7 +8,6 @@ Config g_cfg;
 std::vector<ESPPlayer> g_esp_players;
 int g_local_team = 0;
 
-// ---------- IL2CPP API ----------
 typedef void* (*il2cpp_domain_get_t)();
 typedef void* (*il2cpp_domain_assembly_open_t)(void*, const char*);
 typedef void* (*il2cpp_assembly_get_image_t)(void*);
@@ -57,7 +56,6 @@ static void* AX_FindClass(const char* ns, const char* klass) {
     return p_class_from_name(img, ns, klass);
 }
 
-// ------------- вот здесь убран static -------------
 void* AX_FindMethodPtr(const char* ns, const char* klass, const char* method, int argc) {
     void* k = AX_FindClass(ns, klass);
     if (!k) return nullptr;
@@ -66,7 +64,6 @@ void* AX_FindMethodPtr(const char* ns, const char* klass, const char* method, in
     return p_method_get_pointer(m);
 }
 
-// ---------- WorldToScreen ----------
 typedef Vec3 (*WorldToScreen_t)(void*, Vec3, void*);
 static WorldToScreen_t p_world_to_screen = nullptr;
 
@@ -92,14 +89,12 @@ Vec3 AX_CalcAimAngle(Vec3 from, Vec3 to) {
     return out;
 }
 
-// ---------- Update hook ----------
 static void (*o_PlayerUpdate)(void*, void*) = nullptr;
 static void hk_PlayerUpdate(void* self, void* method) {
     if (o_PlayerUpdate) o_PlayerUpdate(self, method);
     AX_Tick(self);
 }
 
-// ---------- install ----------
 void AX_InstallRuntimeHooks() {
     if (!AX_ResolveIL2CPP()) {
         NSLog(@"[AX] IL2CPP resolve failed");
