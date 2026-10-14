@@ -2,7 +2,6 @@
 #import <objc/runtime.h>
 #import "esp.h"
 
-// ---------- МЕНЮ ----------
 @interface AXMenuView : UIView
 @end
 
@@ -40,10 +39,9 @@
     y = [self section:@"visuals" at:y];
     y = [self addToggle:@"ESP boxes"   at:y key:&g_cfg.esp];
     y = [self addToggle:@"ESP health"  at:y key:&g_cfg.esp_health];
-    y = [self addToggle:@"ESP line"    at:y key:&g_cfg.esp_line];
     y = [self section:@"aim" at:y];
     y = [self addToggle:@"Aimbot"      at:y key:&g_cfg.aimbot];
-    y = [self addSlider:@"aim fov"   min:1 max:180 at:y val:&g_cfg.aim_fov];
+    y = [self addSlider:@"aim fov"    min:1 max:180 at:y val:&g_cfg.aim_fov];
     y = [self addSlider:@"aim smooth" min:1 max:30  at:y val:&g_cfg.aim_smooth];
     _scroll.contentSize = CGSizeMake(f.size.width, y + 12);
     return self;
@@ -103,7 +101,6 @@
 }
 @end
 
-// ---------- ОКНО ----------
 static UIWindow* g_axWin = nil;
 static UIView*   g_canvas = nil;
 
@@ -123,13 +120,11 @@ void AX_StartOverlay() {
         g_axWin.backgroundColor = UIColor.clearColor;
         g_axWin.rootViewController = [UIViewController new];
 
-        // canvas для ESP-боксов — на весь экран
         g_canvas = [[UIView alloc] initWithFrame:scr];
         g_canvas.backgroundColor = UIColor.clearColor;
         g_canvas.userInteractionEnabled = NO;
         [g_axWin.rootViewController.view addSubview:g_canvas];
 
-        // меню
         AXMenuView* mv = [[AXMenuView alloc] initWithFrame:fr];
         mv.userInteractionEnabled = YES;
         [g_axWin.rootViewController.view addSubview:mv];
@@ -143,39 +138,29 @@ void AX_StartOverlay() {
     });
 }
 
-// ---------- ESP-РЕНДЕР ----------
-void AX_DrawESP() {
+extern "C" void AX_DrawESP() {
     if (!g_cfg.esp) return;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!g_canvas) return;
-
-        // чистим прошлый кадр
         for (UIView* v in [g_canvas subviews]) {
             if (v.tag == 9999) [v removeFromSuperview];
         }
-
-        extern std::vector<ESPPlayer> g_esp_players;
         for (auto& p : g_esp_players) {
             if (!p.valid) continue;
-
             Vec3 head, feet;
-            extern bool AX_WorldToScreen(Vec3, Vec3*);
             if (!AX_WorldToScreen(p.world_head, &head)) continue;
             if (!AX_WorldToScreen(p.world_feet, &feet)) continue;
-
             float h = feet.y - head.y;
             if (h < 4 || h > 2000) continue;
             float w = h * 0.5f;
             CGRect box = CGRectMake(head.x - w/2, head.y, w, h);
-
             UIView* v = [[UIView alloc] initWithFrame:box];
             v.tag = 9999;
             v.backgroundColor = UIColor.clearColor;
             v.layer.borderColor = [UIColor redColor].CGColor;
             v.layer.borderWidth = 1.5;
             [g_canvas addSubview:v];
-
             if (g_cfg.esp_health) {
                 UILabel* hp = [[UILabel alloc] initWithFrame:CGRectMake(-40, 0, 35, 18)];
                 hp.text = [NSString stringWithFormat:@"%d", (int)p.health];
@@ -183,11 +168,6 @@ void AX_DrawESP() {
                 hp.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightBold];
                 hp.textAlignment = NSTextAlignmentRight;
                 [v addSubview:hp];
-            }
-
-            if (g_cfg.esp_line) {
-                UIView* line = [[UIView alloc] initWithFrame:CGRectMake(-(head.x - g_canvas.bounds.size.width/2), h, 1, 1)];
-                // *линия от низа экрана к голове — рисуется через CALayer или CAShapeLayer*
             }
         }
     });
