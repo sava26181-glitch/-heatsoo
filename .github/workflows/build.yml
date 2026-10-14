@@ -1,0 +1,89 @@
+name: ax-build
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}
+
+      - name: install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang perl libssl-dev libplist-dev \
+            libpng-dev libjpeg-dev fakeroot dpkg file xz-utils unzip wget zstd
+          git lfs install || true
+          curl -L -o /usr/local/bin/ldid \
+            https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 || true
+          chmod +x /usr/local/bin/ldid || true
+          echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
+
+      - name: clone theos
+        run: |
+          if [ ! -d "$GITHUB_WORKSPACE/theos" ]; then
+            git clone --recursive --depth 1 https://github.com/theos/theos.git "$GITHUB_WORKSPACE/theos"
+          fi
+
+      - name: install toolchain (procursus)
+        run: |
+          mkdir -p $THEOS/toolchain
+          cd $THEOS/toolchain
+          # procursus toolchain — содержит linux/iphone/bin/clang
+          curl -L --retry 3 -o tc.tar.zst \
+            "https://github.com/theos/toolchain/releases/latest/download/toolchain-linux-ubuntu22.04-x86_64.tar.zst" || true
+          SIZE=$(stat -c %s tc.tar.zst 2>/dev/null || echo 0)
+          echo "zst size: $SIZE"
+          if [ "$SIZE" -gt 10000000 ]; then
+            zstd -d tc.tar.zst -o tc.tar || true
+            tar -xf tc.tar || true
+            rm -f tc.tar tc.tar.zst
+          else
+            rm -f tc.tar.zst
+            # fallback — .tar.xz
+            curl -L --retry 3 -o tc.tar.xz \
+              "https://github.com/theos/toolchain/releases/latest/download/toolchain-linux-ubuntu22.04-x86_64.tar.xz" || true
+            SIZE=$(stat -c %s tc.tar.xz 2>/dev/null || echo 0)
+            echo "xz size: $SIZE"
+            tar -xf tc.tar.xz || true
+            rm -f tc.tar.xz
+          fi
+          echo "=== toolchain dir ==="
+          ls -la $THEOS/toolchain/ || true
+          find $THEOS/toolchain -name "clang*" -type f 2>/dev/null | head -n 10 || true
+          ls -la $THEOS/toolchain/linux/iphone/bin/ 2>/dev/null || true
+
+      - name: install ios sdk
+        run: |
+          mkdir -p $THEOS/sdks
+          echo "=== cloning theos/sdks ==="
+          git clone --depth 1 https://github.com/theos/sdks.git /tmp/theos-sdks || true
+          cd /tmp/theos-sdks || exit 0
+          git lfs pull || true
+          ls -la
+          for d in /tmp/theos-sdks/*.sdk; do
+            [ -d "$d" ] && cp -r "$d" $THEOS/sdks/ && echo "copied: $d"
+          done
+          echo "=== final sdks dir ==="
+          ls -la $THEOS/sdks/
+          du -sh $THEOS/sdks/* || true
+
+      - name: build
+        run: |
+          make clean || true
+          make package FINALPACKAGE=1 || true
+          echo "=== packages dir ==="
+          ls -la packages/ || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-deb
+          path: packages/*.deb
+          if-no-files-found: warn
