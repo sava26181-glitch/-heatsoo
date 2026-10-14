@@ -1,0 +1,9 @@
+Package: com.ax.so2menu
+Name: AXMenu
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: AX ESP + Aimbot
+Maintainer: dj
+Author: dj
+Section: Tweaks
+Depends: mobilesubstrate
