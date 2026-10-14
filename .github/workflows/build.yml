@@ -14,7 +14,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y git make clang llvm lld perl libssl-dev libplist-dev \
             libpng-dev libjpeg-dev fakeroot dpkg file xz-utils unzip wget zstd curl \
-            libtinfo6 rsync zip build-essential
+            libtinfo6 rsync zip build-essential libplist-utils
           curl -L -o /usr/local/bin/ldid \
             https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 || true
           chmod +x /usr/local/bin/ldid || true
@@ -56,6 +56,23 @@ jobs:
           ls -la $THEOS/sdks/
           du -sh $THEOS/sdks/* 2>/dev/null || true
 
+      - name: debug plist
+        run: |
+          echo "=== ls Resources ==="
+          ls -la Resources/ || echo "no Resources dir"
+          echo "=== cat AXMenu.plist ==="
+          cat Resources/AXMenu.plist || echo "not found"
+          echo "=== hexdump first 300 bytes ==="
+          xxd Resources/AXMenu.plist 2>/dev/null | head -n 20 || echo "no file"
+          echo "=== plutil check ==="
+          plutil -lint Resources/AXMenu.plist 2>&1 || true
+          echo "=== all plists in project ==="
+          find . -name "*.plist" -not -path "./theos/*" -not -path "./.git/*"
+          echo "=== Makefile ==="
+          cat Makefile
+          echo "=== control ==="
+          cat control
+
       - name: build
         run: |
           rm -rf .theos packages
@@ -68,3 +85,4 @@ jobs:
         with:
           name: AXMenu-deb
           path: packages/*.deb
+          if-no-files-found: warn
