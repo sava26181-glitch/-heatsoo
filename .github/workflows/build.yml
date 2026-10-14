@@ -9,18 +9,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: cache theos
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}/theos
-          key: theos-${{ runner.os }}-v2
-
       - name: install deps
         run: |
           sudo apt-get update
           sudo apt-get install -y git make clang llvm lld perl libssl-dev libplist-dev \
             libpng-dev libjpeg-dev fakeroot dpkg file xz-utils unzip wget zstd curl
-          git lfs install || true
           curl -L -o /usr/local/bin/ldid \
             https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 || true
           chmod +x /usr/local/bin/ldid || true
@@ -38,11 +31,44 @@ jobs:
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           echo "=== theos tree ==="
           ls -la $THEOS/ || true
-          echo "=== toolchain ==="
-          ls -la $THEOS/toolchain/ 2>/dev/null || true
+          echo "=== toolchain check ==="
           find $THEOS/toolchain -name "clang" -type f 2>/dev/null | head -n 5 || true
-          echo "=== sdks ==="
-          ls -la $THEOS/sdks/ 2>/dev/null || true
+
+      - name: install ios sdk from xybp888
+        run: |
+          mkdir -p $THEOS/sdks
+          echo "=== cloning xybp888/iOS-SDKs ==="
+          git clone --depth 1 https://github.com/xybp888/iOS-SDKs.git /tmp/xy-sdks || true
+          cd /tmp/xy-sdks || true
+          echo "=== repo contents ==="
+          ls -la /tmp/xy-sdks/ || true
+          echo "=== looking for .sdk dirs ==="
+          find /tmp/xy-sdks -maxdepth 2 -type d -name "*.sdk" | head -n 10 || true
+          # копируем все .sdk папки
+          for d in $(find /tmp/xy-sdks -maxdepth 2 -type d -name "*.sdk"); do
+            echo "copying $d"
+            cp -r "$d" $THEOS/sdks/
+          done
+          echo "=== sdks dir ==="
+          ls -la $THEOS/sdks/ || true
+          du -sh $THEOS/sdks/* 2>/dev/null || true
+
+      - name: install ios sdk (fallback)
+        run: |
+          if [ -z "$(ls -A $THEOS/sdks 2>/dev/null | grep sdk)" ]; then
+            echo "no sdks yet, trying theos/sdks git clone"
+            git clone --depth 1 https://github.com/theos/sdks.git /tmp/theos-sdks || true
+            cd /tmp/theos-sdks || true
+            ls -la
+            for d in /tmp/theos-sdks/*.sdk; do
+              [ -d "$d" ] && cp -r "$d" $THEOS/sdks/
+            done
+            echo "=== sdks after fallback ==="
+            ls -la $THEOS/sdks/
+            du -sh $THEOS/sdks/* || true
+          else
+            echo "sdks already present, skipping fallback"
+          fi
 
       - name: build
         run: |
