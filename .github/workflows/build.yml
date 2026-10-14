@@ -1,0 +1,116 @@
+name: Build AXMenu (rootless)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Theos (official installer)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl sudo
+          export THEOS
+          curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos -o install-theos
+          bash install-theos 2>&1 | tee "$RUNNER_TEMP/install-theos.log"
+
+      - name: Install ldid (ProcursusTeam)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          gh release view --repo ProcursusTeam/ldid --json tagName,assets \
+            --jq '.tagName, (.assets[].name)'
+          asset=$(gh release view --repo ProcursusTeam/ldid --json assets \
+            --jq '.assets[].name | select(test("linux.*(x86_64|amd64)"))' | head -n1)
+          test -n "$asset" || { echo "No linux x86_64 ldid asset"; exit 1; }
+          gh release download --repo ProcursusTeam/ldid --pattern "$asset" --dir "$RUNNER_TEMP"
+          sudo install -m 0755 "$RUNNER_TEMP/$asset" /usr/local/bin/ldid
+          file /usr/local/bin/ldid
+          ldid 2>&1 | head -n3 || true
+          command -v ldid
+
+      - name: Verify toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "========== TOOLCHAIN =========="
+          ls -la "$THEOS/toolchain/linux/iphone/bin/"
+          find "$THEOS/toolchain" -name clang -print
+          find "$THEOS/toolchain" -type f -name 'ld64.lld' -print
+          clang="$THEOS/toolchain/linux/iphone/bin/clang"
+          test -x "$clang"
+          file "$clang"
+          ldd "$clang"
+          if ldd "$clang" | grep -q 'not found'; then
+            echo "Missing shared libraries"; exit 1
+          fi
+          "$clang" --version
+
+      - name: Verify SDK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          echo "========== SDK DIRECTORY =========="
+          ls -la "$THEOS/sdks/"
+          echo "========== SDK SIZES =========="
+          du -sh "$THEOS/sdks"/*.sdk
+          echo "========== SDK HEADERS =========="
+          sdk=$(ls -d "$THEOS"/sdks/iPhoneOS*.sdk | sort -V | tail -n1)
+          echo "Using SDK: $sdk"
+          for fw in Foundation UIKit Metal MetalKit QuartzCore; do
+            h="$sdk/System/Library/Frameworks/$fw.framework/Headers/$fw.h"
+            if [ -f "$h" ]; then echo "OK  $h"; else echo "MISSING $h"; exit 1; fi
+          done
+
+      - name: Build
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export PATH="$THEOS/toolchain/linux/iphone/bin:$PATH"
+          make clean
+          make package FINALPACKAGE=1 2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Validate .deb
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          shopt -s nullglob
+          debs=(packages/*.deb)
+          test ${#debs[@]} -ge 1
+          for d in "${debs[@]}"; do
+            test -s "$d"
+            dpkg-deb --info "$d" | tee /tmp/info.txt
+            grep -q 'Package: com.ax.so2menu' /tmp/info.txt
+            grep -q 'Architecture: iphoneos-arm64' /tmp/info.txt
+            dpkg-deb --contents "$d" | tee /tmp/contents.txt
+            grep -q 'var/jb/' /tmp/contents.txt
+            grep -q 'AXMenu.dylib' /tmp/contents.txt
+          done
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-build-logs
+          path: ${{ runner.temp }}/*.log
+          if-no-files-found: warn
+
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-rootless-iphoneos-arm64
+          path: packages/*.deb
+          if-no-files-found: error
+          retention-days: 14
