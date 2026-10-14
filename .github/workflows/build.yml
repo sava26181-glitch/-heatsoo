@@ -1,0 +1,71 @@
+name: ax-build
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cache theos
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/theos
+          key: theos-${{ runner.os }}
+
+      - name: install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git make clang perl libssl-dev libplist-dev \
+            libpng-dev libjpeg-dev fakeroot dpkg file xz-utils
+          curl -L -o /usr/local/bin/ldid \
+            https://github.com/ProcursusTeam/ldid/releases/latest/download/ldid_linux_x86_64 || true
+          chmod +x /usr/local/bin/ldid || true
+          echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
+
+      - name: clone theos
+        run: |
+          if [ ! -d "$GITHUB_WORKSPACE/theos" ]; then
+            git clone --recursive --depth 1 https://github.com/theos/theos.git "$GITHUB_WORKSPACE/theos"
+          fi
+
+      - name: install toolchain
+        run: |
+          mkdir -p $THEOS/toolchain
+          curl -L -o /tmp/tc.tar.xz \
+            https://github.com/theos/toolchain/releases/download/linux/toolchain-linux-ubuntu22.04-x86_64.tar.xz || true
+          tar -xf /tmp/tc.tar.xz -C $THEOS/toolchain || true
+
+      - name: install ios sdk
+        run: |
+          mkdir -p $THEOS/sdks
+          cd $THEOS/sdks
+          curl -L -o iPhoneOS15.6.sdk.tar.xz \
+            https://github.com/xybp888/iOS-SDKs/raw/master/iPhoneOS15.6.sdk.tar.xz || \
+          curl -L -o iPhoneOS15.6.sdk.tar.xz \
+            https://github.com/theos/sdks/releases/download/master/iPhoneOS15.6.sdk.tar.xz || true
+          tar -xf iPhoneOS15.6.sdk.tar.xz || true
+          rm -f iPhoneOS15.6.sdk.tar.xz || true
+          ls -la $THEOS/sdks/
+
+      - name: list files
+        run: |
+          echo "=== root ==="
+          ls -la
+          echo "=== Resources ==="
+          ls -la Resources/ || true
+
+      - name: build
+        run: |
+          make clean || true
+          make package FINALPACKAGE=1 || true
+          echo "=== packages dir ==="
+          ls -la packages/ || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-deb
+          path: packages/*.deb
+          if-no-files-found: warn
