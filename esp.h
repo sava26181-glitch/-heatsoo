@@ -12,7 +12,7 @@ struct Config {
     bool  aimbot      = false;
     float aim_fov     = 45.0f;
     float aim_smooth  = 8.0f;
-    int   aim_bone    = 0;   // 0=head, 1=chest, 2=pelvis
+    int   aim_bone    = 0;
     bool  aim_visible = false;
 };
 extern Config g_cfg;
@@ -27,5 +27,19 @@ struct ESPPlayer {
 extern std::vector<ESPPlayer> g_esp_players;
 extern int g_local_team;
 
-bool AX_WorldToScreen(Vec3 world, Vec3* screen);
-Vec3 AX_CalcAimAngle(Vec3 from, Vec3 to);
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+bool  AX_WorldToScreen(Vec3 world, Vec3* screen);
+Vec3  AX_CalcAimAngle(Vec3 from, Vec3 to);
+void  AX_CollectESP();
+void  AX_DrawESP();
+void  AX_Tick(void* local_player);
+void  AX_InstallRuntimeHooks();
+void  AX_StartOverlay();
+void* AX_FindMethodPtr(const char* ns, const char* klass, const char* method, int argc);
+
+#ifdef __cplusplus
+}
+#endif
