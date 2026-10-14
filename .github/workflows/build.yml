@@ -1,0 +1,315 @@
+name: Build AXMenu (Rootless)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - "Makefile"
+      - "control"
+      - "*.xm"
+      - "*.mm"
+      - "*.h"
+      - ".github/workflows/build.yml"
+      - "Resources/**"
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-axmenu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build rootless iOS package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            bash \
+            build-essential \
+            ca-certificates \
+            curl \
+            file \
+            fakeroot \
+            git \
+            lzma \
+            make \
+            perl \
+            pkg-config \
+            python3 \
+            rsync \
+            unzip \
+            xz-utils \
+            zlib1g-dev
+
+          git --version
+          make --version
+          curl --version
+
+      - name: Install ldid from ProcursusTeam release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          LDID_VERSION="v2.1.5-procursus7"
+          LDID_URL="https://github.com/ProcursusTeam/ldid/releases/download/${LDID_VERSION}/ldid_linux_x86_64"
+
+          curl \
+            --fail \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            "$LDID_URL" \
+            --output /tmp/ldid
+
+          test -s /tmp/ldid
+          file /tmp/ldid
+
+          sudo install -m 0755 /tmp/ldid /usr/local/bin/ldid
+
+          command -v ldid
+          ldid -h
+
+      - name: Install Theos
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          git clone \
+            --depth 1 \
+            --recurse-submodules \
+            https://github.com/theos/theos.git \
+            "$THEOS"
+
+          test -f "$THEOS/makefiles/common.mk"
+          test -d "$THEOS/makefiles"
+
+          mkdir -p \
+            "$THEOS/toolchain/linux/iphone" \
+            "$THEOS/sdks"
+
+          echo "THEOS=$THEOS" >> "$GITHUB_ENV"
+
+          git -C "$THEOS" rev-parse HEAD
+
+      - name: Install official Linux iOS toolchain
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          TOOLCHAIN_URL="https://github.com/sbingner/llvm-project/releases/latest/download/linux-ios-arm64e-clang-toolchain.tar.lzma"
+          TOOLCHAIN_ARCHIVE="$RUNNER_TEMP/linux-ios-arm64e-clang-toolchain.tar.lzma"
+          TOOLCHAIN_EXTRACT="$RUNNER_TEMP/ios-toolchain-extract"
+
+          mkdir -p "$TOOLCHAIN_EXTRACT"
+
+          curl \
+            --fail \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            "$TOOLCHAIN_URL" \
+            --output "$TOOLCHAIN_ARCHIVE"
+
+          test -s "$TOOLCHAIN_ARCHIVE"
+
+          if ! xz -t "$TOOLCHAIN_ARCHIVE"; then
+            echo "::error::Downloaded toolchain is not a valid LZMA/XZ archive."
+            file "$TOOLCHAIN_ARCHIVE"
+            exit 1
+          fi
+
+          tar \
+            --lzma \
+            -xf "$TOOLCHAIN_ARCHIVE" \
+            -C "$TOOLCHAIN_EXTRACT"
+
+          TOOLCHAIN_DIR="$TOOLCHAIN_EXTRACT/ios-arm64e-clang-toolchain"
+
+          if [[ ! -d "$TOOLCHAIN_DIR" ]]; then
+            TOOLCHAIN_DIR="$TOOLCHAIN_EXTRACT"
+          fi
+
+          if [[ ! -x "$TOOLCHAIN_DIR/bin/clang" ]]; then
+            echo "::error::Expected clang was not found in the extracted toolchain."
+            find "$TOOLCHAIN_EXTRACT" -maxdepth 5 -type f -name clang -print
+            find "$TOOLCHAIN_EXTRACT" -maxdepth 3 -type f -print | head -200
+            exit 1
+          fi
+
+          cp -a \
+            "$TOOLCHAIN_DIR/." \
+            "$THEOS/toolchain/linux/iphone/"
+
+          chmod +x "$THEOS/toolchain/linux/iphone/bin/clang"
+
+          test -x "$THEOS/toolchain/linux/iphone/bin/clang"
+
+          "$THEOS/toolchain/linux/iphone/bin/clang" --version
+
+          echo "Official Linux iOS toolchain installed."
+
+      - name: Install iOS SDK from official Theos SDK release
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          SDK_VERSION="master-146e41f"
+          SDK_NAME="iPhoneOS16.5.sdk"
+          SDK_URL="https://github.com/theos/sdks/releases/download/${SDK_VERSION}/${SDK_NAME}.tar.xz"
+          SDK_ARCHIVE="$RUNNER_TEMP/${SDK_NAME}.tar.xz"
+          SDK_EXTRACT="$RUNNER_TEMP/sdk-extract"
+
+          mkdir -p "$SDK_EXTRACT"
+
+          curl \
+            --fail \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            "$SDK_URL" \
+            --output "$SDK_ARCHIVE"
+
+          test -s "$SDK_ARCHIVE"
+
+          SDK_SIZE="$(stat -c '%s' "$SDK_ARCHIVE")"
+
+          echo "Downloaded SDK archive size: $SDK_SIZE bytes"
+
+          if [[ "$SDK_SIZE" -lt 10000000 ]]; then
+            echo "::error::SDK archive is smaller than 10 MB; refusing to use a potentially invalid download."
+            file "$SDK_ARCHIVE"
+            exit 1
+          fi
+
+          xz -t "$SDK_ARCHIVE"
+
+          tar \
+            -xJf "$SDK_ARCHIVE" \
+            -C "$SDK_EXTRACT"
+
+          SDK_SOURCE="$SDK_EXTRACT/$SDK_NAME"
+
+          if [[ ! -d "$SDK_SOURCE" ]]; then
+            SDK_SOURCE="$(find "$SDK_EXTRACT" -type d -name "$SDK_NAME" -print -quit)"
+          fi
+
+          if [[ -z "$SDK_SOURCE" || ! -d "$SDK_SOURCE" ]]; then
+            echo "::error::The expected SDK directory was not found after extraction."
+            find "$SDK_EXTRACT" -maxdepth 3 -print
+            exit 1
+          fi
+
+          test -f "$SDK_SOURCE/System/Library/Frameworks/Foundation.framework/Headers/Foundation.h"
+          test -f "$SDK_SOURCE/usr/include/Availability.h"
+
+          cp -a "$SDK_SOURCE" "$THEOS/sdks/"
+
+          test -d "$THEOS/sdks/$SDK_NAME"
+
+          du -sh "$THEOS/sdks/$SDK_NAME"
+
+      - name: Verify Theos, toolchain and SDK
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          echo "========== THEOS =========="
+          printf 'THEOS=%s\n' "$THEOS"
+          test -f "$THEOS/makefiles/common.mk"
+
+          echo "========== TOOLCHAIN BIN =========="
+          ls -la "$THEOS/toolchain/linux/iphone/bin/"
+
+          echo "========== CLANG LOCATIONS =========="
+          find "$THEOS/toolchain" -name clang -type f -print
+
+          echo "========== CLANG EXECUTABLE =========="
+          test -x "$THEOS/toolchain/linux/iphone/bin/clang"
+          "$THEOS/toolchain/linux/iphone/bin/clang" --version
+
+          echo "========== LINKER =========="
+          find "$THEOS/toolchain" -type f \( \
+            -name ld64.lld -o \
+            -name ld.lld -o \
+            -name llvm-ar -o \
+            -name llvm-ranlib \
+          \) -print
+
+          echo "========== SDK DIRECTORY =========="
+          ls -la "$THEOS/sdks/"
+
+          echo "========== SDK SIZES =========="
+          du -sh "$THEOS/sdks"/*
+
+          echo "========== SDK VALIDATION =========="
+          test -f "$THEOS/sdks/iPhoneOS16.5.sdk/System/Library/Frameworks/Foundation.framework/Headers/Foundation.h"
+          test -f "$THEOS/sdks/iPhoneOS16.5.sdk/usr/include/Availability.h"
+
+          echo "========== LDID =========="
+          command -v ldid
+          file "$(command -v ldid)"
+
+          echo "========== PROJECT FILES =========="
+          ls -la
+          test -f Makefile
+          test -f control
+
+      - name: Build rootless Debian package
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          export THEOS="$GITHUB_WORKSPACE/theos"
+          export PATH="$THEOS/toolchain/linux/iphone/bin:$PATH"
+
+          make clean
+          make package FINALPACKAGE=1
+
+          echo "========== GENERATED PACKAGES =========="
+
+          find packages -maxdepth 1 -type f -name '*.deb' -print
+
+          if ! compgen -G 'packages/*.deb' > /dev/null; then
+            echo "::error::The build completed without producing a .deb package."
+            exit 1
+          fi
+
+          for package in packages/*.deb; do
+            test -s "$package"
+            dpkg-deb --info "$package"
+          done
+
+      - name: Upload Debian package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXMenu-rootless-iphoneos-arm64
+          path: packages/*.deb
+          if-no-files-found: error
+          retention-days: 14
