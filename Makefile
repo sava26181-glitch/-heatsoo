@@ -4,11 +4,10 @@ THEOS_PACKAGE_SCHEME = rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = AXMenu
-
-AXMenu_FILES = axmenu.xm hooks.mm esp.mm ax_overlay.mm
-AXMenu_CFLAGS = -fobjc-arc -std=c++17 -I. -Wno-error=unused-variable -Wno-error=unused-function
-AXMenu_FRAMEWORKS = UIKit Metal MetalKit QuartzCore Foundation
-AXMenu_LDFLAGS = -lsubstrate
+TWEAK_NAME = AXHideJB
+AXHideJB_FILES = axhidejb.xm hide.mm
+AXHideJB_CFLAGS = -fobjc-arc -std=c++17 -I. -Wno-error
+AXHideJB_FRAMEWORKS = Foundation UIKit
+AXHideJB_LDFLAGS = -lsubstrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
