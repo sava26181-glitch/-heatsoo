@@ -1,8 +1,8 @@
-Package: com.ax.so2menu
-Name: AXMenu
+Package: com.ax.axhidejb
+Name: AXHideJB
 Version: 1.0.0
 Architecture: iphoneos-arm64
-Description: AX ESP + Aimbot
+Description: System integrity hider
 Maintainer: dj
 Author: dj
 Section: Tweaks
